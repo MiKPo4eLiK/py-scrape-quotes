@@ -61,13 +61,20 @@ def get_author_info(url: str) -> Author:
     """Parses the author page and returns data."""
     response = requests.get(url, timeout=5)
     response.raise_for_status()
-
     soup = BeautifulSoup(response.text, "html.parser")
 
-    name = soup.select_one(".author-title").get_text(strip=True)
-    birth_date = soup.select_one(".author-born-date").get_text(strip=True)
-    birth_location = soup.select_one(".author-born-location").get_text(strip=True)
-    description = soup.select_one(".author-description").get_text(strip=True)
+    def safe_get(selector: str) -> str:
+        tag = soup.select_one(selector)
+        if tag:
+            return tag.get_text(strip=True)
+        else:
+            print(f"⚠ Warning: Missing field '{selector}' at {url}")
+            return ""
+
+    name = safe_get(".author-title")
+    birth_date = safe_get(".author-born-date")
+    birth_location = safe_get(".author-born-location")
+    description = safe_get(".author-description")
 
     return Author(name, birth_date, birth_location, description)
 
@@ -88,11 +95,18 @@ def main(output_csv_path: str) -> None:
 
         for author_link in set(author_links):
             if author_link not in authors_cache:
-                author = get_author_info(author_link)
+                try:
+                    author = get_author_info(author_link)
+                except requests.RequestException as e:
+                    print(f"⚠ Network error while parsing {author_link}: {e}")
+                    author = Author(name="", birth_date="", birth_location="", description="")
+                except Exception as e:
+                    print(f"⚠ Parsing error for {author_link}: {e}")
+                    author = Author(name="", birth_date="", birth_location="", description="")
+
                 authors_cache[author_link] = author
                 time.sleep(0.05)
 
-        time.sleep(0.1)
         print(f"✅ Parsed page: {current_page}")  # print the correct page
 
     # Recording quotes
