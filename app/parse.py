@@ -1,9 +1,12 @@
 from dataclasses import dataclass
-from typing import List, Optional
+from typing import Optional
+from urllib.parse import urljoin
 import requests
 from bs4 import BeautifulSoup
 import csv
 import time
+from pathlib import Path
+
 
 BASE_URL = "https://quotes.toscrape.com"
 
@@ -12,7 +15,7 @@ BASE_URL = "https://quotes.toscrape.com"
 class Quote:
     text: str
     author: str
-    tags: List[str]
+    tags: list[str]
 
 
 @dataclass
@@ -23,26 +26,33 @@ class Author:
     description: str
 
 
-def get_quotes_from_page(url: str) -> tuple[List[Quote], Optional[str], List[str]]:
-    """Gets citations from one page and returns the next link and author links."""
-    response = requests.get(url)
+def get_quotes_from_page(url: str) -> tuple[list[Quote], Optional[str], list[str]]:
+    """Gets quotes from one page and returns the next page URL and author links."""
+    response = requests.get(url, timeout=5)
     response.raise_for_status()
 
     soup = BeautifulSoup(response.text, "html.parser")
-    quotes_data = []
-    author_links = []
+    quotes_data: list[Quote] = []
+    author_links: list[str] = []
 
     for quote_div in soup.select(".quote"):
-        text = quote_div.select_one(".text").get_text(strip=True)
-        author = quote_div.select_one(".author").get_text(strip=True)
+        text_tag = quote_div.select_one(".text")
+        author_tag = quote_div.select_one(".author")
+        author_link_tag = quote_div.select_one("a[href*='/author/']")
+
+        if not (text_tag and author_tag and author_link_tag):
+            continue
+
+        text = text_tag.get_text(strip=True)
+        author = author_tag.get_text(strip=True)
         tags = [t.get_text(strip=True) for t in quote_div.select(".tag")]
-        author_url = BASE_URL + quote_div.select_one("a[href*='/author/']")["href"]
+        author_url = urljoin(BASE_URL, author_link_tag['href'])
         author_links.append(author_url)
 
         quotes_data.append(Quote(text=text, author=author, tags=tags))
 
     next_btn = soup.select_one(".next > a")
-    next_url = BASE_URL + next_btn["href"] if next_btn else None
+    next_url = urljoin(BASE_URL, next_btn['href']) if next_btn else None
 
     return quotes_data, next_url, author_links
 
@@ -64,33 +74,36 @@ def get_author_info(url: str) -> Author:
 
 def main(output_csv_path: str) -> None:
     url = BASE_URL
-    all_quotes: List[Quote] = []
-    authors_cache: dict[str, Author] = {}
+    all_quotes = []
+    authors_cache = {}
+
+    output_csv_path = Path(output_csv_path)
+    output_csv_path.parent.mkdir(parents=True, exist_ok=True)
+    authors_csv_path = output_csv_path.parent / "authors.csv"
 
     while url:
+        current_page = url  # save the current page
         quotes, url, author_links = get_quotes_from_page(url)
         all_quotes.extend(quotes)
 
-        # Parse authors if not already in cache
         for author_link in set(author_links):
             if author_link not in authors_cache:
-                print(f"Parsing author: {author_link}")
                 author = get_author_info(author_link)
                 authors_cache[author_link] = author
                 time.sleep(0.05)
 
         time.sleep(0.1)
-        print(f"✅ Parsed page: {url}")
+        print(f"✅ Parsed page: {current_page}")  # print the correct page
 
-    # Write the quotes to quotes.csv
+    # Recording quotes
     with open(output_csv_path, "w", newline="", encoding="utf-8") as csvfile:
         writer = csv.writer(csvfile)
         writer.writerow(["text", "author", "tags"])
         for q in all_quotes:
             writer.writerow([q.text, q.author, ", ".join(q.tags)])
 
-    # Write authors to authors.csv
-    with open("authors.csv", "w", newline="", encoding="utf-8") as csvfile:
+    # Authors record
+    with open(authors_csv_path, "w", newline="", encoding="utf-8") as csvfile:
         writer = csv.writer(csvfile)
         writer.writerow(["name", "birth_date", "birth_location", "description"])
         for author in authors_cache.values():
@@ -102,7 +115,3 @@ def main(output_csv_path: str) -> None:
             ])
 
     print(f"✅ Parsed {len(all_quotes)} quotes and {len(authors_cache)} authors.")
-
-
-if __name__ == "__main__":
-    main("quotes.csv")
